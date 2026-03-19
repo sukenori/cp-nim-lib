@@ -548,7 +548,11 @@ when not declared(LIBRARY_TEMPLATE):
 
   proc debugPassThrough[T](x: T, label: string = ""): T {.inline, discardable.} =
     when defined(debug):
-      let prefix = if label.len > 0: label & " = " else: "\x1b[31m[DUMP]\x1b[0m "
+      let dumpTag = "\x1b[31m[dump]\x1b[0m"
+      let prefix = if label.len > 0:
+          dumpTag & " " & label & " = "
+        else:
+          dumpTag & " "
       stderr.writeLine(prefix & $x)
     return x
   template dump*(x: untyped): untyped =

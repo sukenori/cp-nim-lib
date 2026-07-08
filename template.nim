@@ -667,21 +667,143 @@ when not declared(LIBRARY_TEMPLATE):
   template echoFloat(v: float) =
     echo v.formatFloat(ffDecimal, 20)
 
-  proc debugPassThrough[T](x: T, label: string = ""): T {.inline, discardable.} =
-    when defined(debug):
-      let dumpTag = "\x1b[31m[dump]\x1b[0m"
-      let prefix =
-        if label.len > 0:
-          dumpTag & " " & label & " = "
-        else:
-          dumpTag & " "
-      stderr.writeLine(prefix & $x)
-    return x
+  when defined(debug):
+    import os
 
-  template dump*(x: untyped): untyped =
-    block:
-      let val = x
-      when defined(debug):
-        debugPassThrough(val, astToStr(x))
+    var debugLogFile: File
+    var debugLogOpened = false
+    var watchQueue: seq[string] = @[]
+
+    proc debugLogPath(): string =
+      let exePath = getAppFilename()
+      result = exePath.splitFile.dir / "debug.log"
+
+    proc debugLogOpen() =
+      if not debugLogOpened:
+        debugLogOpened = true
+        debugLogFile = open(debugLogPath(), fmWrite)
+
+    proc debugLogClose() {.noconv.} =
+      if debugLogOpened:
+        debugLogFile.close()
+
+    addQuitProc(debugLogClose)
+
+    proc isInfInt(v: int): int =
+      if v == int.inf:
+        return 1
+      elif v == -int.inf:
+        return -1
       else:
-        val
+        return 0
+
+    proc isInfFloat(v: float): int =
+      if v == float.inf:
+        return 1
+      elif v == -float.inf:
+        return -1
+      else:
+        return 0
+
+    proc debugFmtScalar[T](v: T): string =
+      when T is int:
+        let s = isInfInt(v)
+        if s == 1: "inf"
+        elif s == -1: "-inf"
+        else: $v
+      elif T is float:
+        let s = isInfFloat(v)
+        if s == 1: "inf"
+        elif s == -1: "-inf"
+        else: $v
+      else:
+        $v
+
+    proc debugFmt1d[T](s: openArray[T]): string =
+      let n = s.len
+      if n == 0: return "[]"
+      result = "["
+      if n <= 10:
+        for i in 0 ..< n:
+          if i > 0: result &= ", "
+          result &= debugFmtScalar(s[i])
+      else:
+        for i in 0 ..< 7:
+          if i > 0: result &= ", "
+          result &= debugFmtScalar(s[i])
+        result &= ", ...(" & $(n - 10) & ")..., "
+        for i in n - 3 ..< n:
+          if i > n - 3: result &= ", "
+          result &= debugFmtScalar(s[i])
+      result &= "]"
+
+    proc debugFmtTop(v: int, baseIndent: string): string = debugFmtScalar(v)
+    proc debugFmtTop(v: float, baseIndent: string): string = debugFmtScalar(v)
+    proc debugFmtTop(v: bool, baseIndent: string): string = $v
+    proc debugFmtTop(v: char, baseIndent: string): string = $v
+    proc debugFmtTop(v: string, baseIndent: string): string = v
+
+    proc debugFmtTop[T](v: seq[T], baseIndent: string): string =
+      when T is seq:
+        when T isnot seq[seq]:
+          result = "\n"
+          for row in v:
+            result &= baseIndent & "  " & debugFmt1d(row) & "\n"
+        else:
+          result = "\n"
+          for i, plane in v:
+            result &= baseIndent & "  [" & $i & "]:\n"
+            for row in plane:
+              result &= baseIndent & "    " & debugFmt1d(row) & "\n"
+      else:
+        result = debugFmt1d(v)
+
+    proc debugWriteWatch(baseCol: int) =
+      let indent = repeat(' ', baseCol + 2)
+      for s in watchQueue:
+        debugLogFile.writeLine(indent & s)
+
+    proc debugWriteDump(label, valStr: string, col: int) =
+      debugLogOpen()
+      let indent = repeat(' ', col)
+      if label.len > 0:
+        debugLogFile.writeLine(indent & label & " = " & valStr)
+      else:
+        debugLogFile.writeLine(indent & valStr)
+      debugWriteWatch(col)
+
+  macro dump*(args: varargs[untyped]): untyped =
+    result = newStmtList()
+    if args.len == 0: return
+
+    let info = lineInfoObj(args[0])
+    let col = info.column
+
+    for arg in args:
+      let colLit = newLit(col)
+      if arg.kind in {nnkStrLit, nnkRStrLit, nnkTripleStrLit}:
+        let s = newLit(arg.strVal)
+        result.add quote do:
+          when defined(debug):
+            debugWriteDump("", `s`, `colLit`)
+      else:
+        let labelStr = newLit(arg.repr)
+        result.add quote do:
+          when defined(debug):
+            block:
+              let val = `arg`
+              let valStr = debugFmtTop(val, repeat(' ', `colLit`))
+              debugWriteDump(`labelStr`, valStr, `colLit`)
+
+  macro watch*(arg: untyped): untyped =
+    result = newStmtList()
+    let info = lineInfoObj(arg)
+    let col = info.column
+    let labelStr = newLit(arg.repr)
+
+    result.add quote do:
+      when defined(debug):
+        block:
+          let val = `arg`
+          let valStr = debugFmtTop(val, repeat(' ', `col`))
+          watchQueue.add(`labelStr` & " = " & valStr)

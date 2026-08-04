@@ -550,7 +550,6 @@ when not declared(LIBRARY_TEMPLATE):
   template dump*(x: untyped): untyped =
     when defined(debug):
       debugPassThrough(x, astToStr(x))
-
   # ============================================================
   # dump用（-d:debug のみ）
   # ============================================================
@@ -832,20 +831,24 @@ when not declared(LIBRARY_TEMPLATE):
     # ----------------------------------------------------------
     # randSeq DSL
     #
-    #   randSeq(5: 1..10)
-    #   randSeq(5: 1..10, {unique, inc})
-    #   randSeq(3, 3: 1..9, {unique})
-    #   randSeq(2, 3, 4: 1..100)
+    #   randSeq[5: 1..10]
+    #   randSeq[5: 1..10, {unique, inc}]
+    #   randSeq[3, 3: 1..9, {unique}]
+    #   randSeq[2, 3, 4: 1..100]
     #
     # charを渡せば seq[char]、
     # stringを渡せば seq[string]。
     #
-    #   randSeq(5: 'a'..'z', 'A'..'Z')
-    #   randSeq(5: "a".."z")
+    #   randSeq[5: 'a'..'z', 'A'..'Z']
+    #   randSeq[5: "a".."z"]
     #
     # unique/inc/dec は多次元でも全要素に適用される。
     # ----------------------------------------------------------
-    macro randSeq*(args: varargs[untyped]): untyped =
+    type InitRandSeq = object
+
+    const randSeq* = InitRandSeq()
+
+    macro `[]`*(r: InitRandSeq, args: varargs[untyped]): untyped =
       var colonPos = -1
 
       for i, arg in args:
@@ -855,7 +858,7 @@ when not declared(LIBRARY_TEMPLATE):
           colonPos = i
 
       assert colonPos >= 0,
-        "randSeq: use randSeq(d1, d2, ...: range[, options])"
+        "randSeq: use randSeq[d1, d2, ...: range[, options]]"
 
       var dims: seq[NimNode] = @[]
       for i in 0 ..< colonPos:
@@ -902,8 +905,8 @@ when not declared(LIBRARY_TEMPLATE):
         )
       else:
         var poolItems: seq[NimNode] = @[]
-        for r in ranges:
-          poolItems.add(newCall(ident"poolOf", r))
+        for valueRange in ranges:
+          poolItems.add(newCall(ident"poolOf", valueRange))
 
         let pools = newTree(
           nnkPrefix,
@@ -936,50 +939,84 @@ when not declared(LIBRARY_TEMPLATE):
     # ----------------------------------------------------------
     # randString
     #
-    #   randString(10: 'a'..'z')
-    #   randString(10: 'a'..'z', 'A'..'Z', '0'..'9')
-    #   randString(10: '(', ')')
-    #   randString(rand(1..5): "A".."Z")
+    #   randString[10: 'a'..'z']
+    #   randString[10: 'a'..'z', 'A'..'Z', '0'..'9']
+    #   randString[10: '(', ')']
+    #   randString[rand(1..5): "A".."Z"]
     # ----------------------------------------------------------
     proc charsToString(cs: openArray[char]): string =
       result = newString(cs.len)
       for i, c in cs:
         result[i] = c
 
-    macro randString*(args: varargs[untyped]): untyped =
+    type InitRandString = object
+
+    const randString* = InitRandString()
+
+    macro `[]`*(r: InitRandString, args: varargs[untyped]): untyped =
       assert args.len >= 1,
         "randString: arguments are required"
 
       assert args[0].kind == nnkExprColonExpr,
-        "randString: use randString(length: char[, char or range...])"
+        "randString: use randString[length: char[, char or range...]]"
 
       let length = args[0][0]
-      var ranges: seq[NimNode] = @[args[0][1]]
+      var options: seq[NimNode] = @[args[0][1]]
 
       for i in 1 ..< args.len:
         assert args[i].kind != nnkCurly,
-          "randString: options are unsupported"
-        ranges.add(args[i])
+          "randString: set literals are unsupported"
+        options.add(args[i])
 
       var poolItems: seq[NimNode] = @[]
-      for r in ranges:
-        poolItems.add(newCall(ident"poolOf", r))
 
-      let pools = newTree(
-        nnkPrefix,
-        ident"@",
-        newTree(nnkBracket, poolItems)
-      )
+      proc addOption(node: NimNode) =
+        case node.kind
+        of nnkCharLit:
+          poolItems.add(node)
+
+        of nnkInfix:
+          assert node.len == 3 and node[0].eqIdent(".."),
+            "randString: each option must be a char or char range"
+
+          assert node[1].kind == nnkCharLit and node[2].kind == nnkCharLit,
+            "randString: range endpoints must be char literals"
+
+          let first = char(node[1].intVal)
+          let last = char(node[2].intVal)
+
+          assert first <= last,
+            "randString: invalid char range"
+
+          for c in first .. last:
+            poolItems.add(newLit(c))
+
+        else:
+          assert false,
+            "randString: each option must be a char or char range"
+
+      for option in options:
+        addOption(option)
+
+      assert poolItems.len > 0,
+        "randString: at least one character is required"
+
+      let pool = newTree(nnkBracket, poolItems)
 
       result = quote do:
         block:
-          let cs = randSeqPoolFlat(`length`, `pools`)
-          charsToString(cs)
+          let choices = `pool`
+          var s = newStringOfCap(`length`)
+
+          for _ in 0 ..< `length`:
+            s.add(choices[rand(choices.high)])
+
+          s
 
     # ----------------------------------------------------------
     # randMap
     #
-    #   randMap(H, W: '.', {('#', 5), ('S', 1), ('G', 1)})
+    #   randMap[H, W: '.', {('#', 5), ('S', 1), ('G', 1)}]
     #
     # base以外の記号は、互いに異なるランダム位置に置かれる。
     # ----------------------------------------------------------
@@ -1010,9 +1047,13 @@ when not declared(LIBRARY_TEMPLATE):
       for i in 0 ..< h:
         result[i] = charsToString(cells[i * w ..< (i + 1) * w])
 
-    macro randMap*(args: varargs[untyped]): untyped =
+    type InitRandMap = object
+
+    const randMap* = InitRandMap()
+
+    macro `[]`*(r: InitRandMap, args: varargs[untyped]): untyped =
       assert args.len == 3,
-        "randMap: use randMap(height, width: base, {(char, count), ...})"
+        "randMap: use randMap[height, width: base, {(char, count), ...}]"
 
       assert args[1].kind == nnkExprColonExpr,
         "randMap: ':' is required between width and base"
@@ -1045,9 +1086,13 @@ when not declared(LIBRARY_TEMPLATE):
     # path:   10%
     # binary: 10%
     # random: 70%
+    #
+    #   randTree[N]
+    #   randTree[N, {directed}]
+    #   randTree[2..N, {directed}]
     # ----------------------------------------------------------
-    proc randTree*(n: int,
-                  opts: set[RandOpt] = {}): seq[(int, int)] =
+    proc randTreeImpl*(n: int,
+                      opts: set[RandOpt] = {}): seq[(int, int)] =
       assert n >= 1,
         "randTree: n must be positive"
 
@@ -1081,13 +1126,28 @@ when not declared(LIBRARY_TEMPLATE):
 
       shuffle(result)
 
-    proc randTree*(r: Slice[int],
-                  opts: set[RandOpt] = {}): seq[(int, int)] =
-      randTree(rand(r), opts)
+    proc randTreeImpl*(valueRange: Slice[int],
+                      opts: set[RandOpt] = {}): seq[(int, int)] =
+      randTreeImpl(rand(valueRange), opts)
 
-    proc randTree*(r: OpenSlice[int],
-                  opts: set[RandOpt] = {}): seq[(int, int)] =
-      randTree(rand(r), opts)
+    proc randTreeImpl*(valueRange: OpenSlice[int],
+                      opts: set[RandOpt] = {}): seq[(int, int)] =
+      randTreeImpl(rand(valueRange), opts)
+
+    type InitRandTree = object
+
+    const randTree* = InitRandTree()
+
+    macro `[]`*(r: InitRandTree, args: varargs[untyped]): untyped =
+      assert args.len == 1 or args.len == 2,
+        "randTree: use randTree[n] or randTree[n, {options}]"
+
+      if args.len == 1:
+        result = newCall(ident"randTreeImpl", args[0])
+      else:
+        assert args[1].kind == nnkCurly,
+          "randTree: options must be a set literal"
+        result = newCall(ident"randTreeImpl", args[0], args[1])
 
     # ----------------------------------------------------------
     # randGraph
@@ -1104,6 +1164,10 @@ when not declared(LIBRARY_TEMPLATE):
     #
     # connected と acyclic を同時指定した場合、
     # m == n - 1 の木になる。
+    #
+    #   randGraph[N, M]
+    #   randGraph[N, M, {simple, connected}]
+    #   randGraph[2..N, N - 1 .. 2 * N, {connected}]
     # ----------------------------------------------------------
     proc graphKey(u, v: int, isDirected: bool): (int, int) =
       if isDirected:
@@ -1111,8 +1175,8 @@ when not declared(LIBRARY_TEMPLATE):
       else:
         (min(u, v), max(u, v))
 
-    proc randGraph*(n, m: int,
-                    opts: set[RandOpt] = {}): seq[(int, int)] =
+    proc randGraphImpl*(n, m: int,
+                        opts: set[RandOpt] = {}): seq[(int, int)] =
       assert n >= 0, "randGraph: negative vertex count"
       assert m >= 0, "randGraph: negative edge count"
 
@@ -1248,13 +1312,28 @@ when not declared(LIBRARY_TEMPLATE):
 
       shuffle(result)
 
-    proc randGraph*(nRange, mRange: Slice[int],
-                    opts: set[RandOpt] = {}): seq[(int, int)] =
-      randGraph(rand(nRange), rand(mRange), opts)
+    proc randGraphImpl*(nRange, mRange: Slice[int],
+                        opts: set[RandOpt] = {}): seq[(int, int)] =
+      randGraphImpl(rand(nRange), rand(mRange), opts)
 
-    proc randGraph*(nRange, mRange: OpenSlice[int],
-                    opts: set[RandOpt] = {}): seq[(int, int)] =
-      randGraph(rand(nRange), rand(mRange), opts)
+    proc randGraphImpl*(nRange, mRange: OpenSlice[int],
+                        opts: set[RandOpt] = {}): seq[(int, int)] =
+      randGraphImpl(rand(nRange), rand(mRange), opts)
+
+    type InitRandGraph = object
+
+    const randGraph* = InitRandGraph()
+
+    macro `[]`*(r: InitRandGraph, args: varargs[untyped]): untyped =
+      assert args.len == 2 or args.len == 3,
+        "randGraph: use randGraph[n, m] or randGraph[n, m, {options}]"
+
+      if args.len == 2:
+        result = newCall(ident"randGraphImpl", args[0], args[1])
+      else:
+        assert args[2].kind == nnkCurly,
+          "randGraph: options must be a set literal"
+        result = newCall(ident"randGraphImpl", args[0], args[1], args[2])
 
     # ----------------------------------------------------------
     # 出力

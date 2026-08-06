@@ -7,6 +7,46 @@ when not declared(LIBRARY_TEMPLATE):
   template inf(T: typedesc[int]): int = 10 ^ 18
   template inf(T: typedesc[float]): float = 1e18
 
+  # ----------------------------------------------------------
+  # 開区間・半開区間
+  #
+  #   1<..10    : (1, 10]
+  #   1..<10    : [1, 10)
+  #   1<..<10   : (1, 10)
+  #
+  # int / char / float で使える。
+  #
+  #   let x = rand(1.0..<2.0)
+  #   if x in 1.1<..3.14:
+  #     ...
+  # ----------------------------------------------------------
+  type OpenSlice*[T] = object
+    a*, b*: T
+    openLeft*, openRight*: bool
+
+  func `<..`*[T](a, b: T): OpenSlice[T] =
+    OpenSlice[T](a: a, b: b, openLeft: true, openRight: false)
+
+  func `..<`*(a, b: float): OpenSlice[float] =
+    OpenSlice[float](a: a, b: b, openLeft: false, openRight: true)
+
+  func `<..<`*[T](a, b: T): OpenSlice[T] =
+    OpenSlice[T](a: a, b: b, openLeft: true, openRight: true)
+
+  proc contains*[T](r: OpenSlice[T], x: T): bool =
+    (if r.openLeft: x > r.a else: x >= r.a) and
+    (if r.openRight: x < r.b else: x <= r.b)
+
+  iterator items*[T](r: OpenSlice[T]): T =
+    when T is SomeFloat:
+      {.error: "OpenSlice[float] は for に使えません（rand() でのサンプリング専用）".}
+    else:
+      var x: T = r.a
+      if r.openLeft: inc x
+      while (if r.openRight: x < r.b else: x <= r.b):
+        yield x
+        inc x
+
   ##- **char@('a')**
   proc `@`(x: char): int =
     case x
@@ -582,36 +622,6 @@ when not declared(LIBRARY_TEMPLATE):
     proc rows*[T](xss: openArray[seq[T]]) =
       for xs in xss:
         row(xs)
-
-    # ----------------------------------------------------------
-    # 開区間・半開区間
-    #
-    #   1<..10    : (1, 10]
-    #   1..<10    : [1, 10)
-    #   1<..<10   : (1, 10)
-    #
-    # int / char / float で使える。
-    #
-    #   let x = rand(1.0..<2.0)
-    #   if x in 1.1<..3.14:
-    #     ...
-    # ----------------------------------------------------------
-    type OpenSlice*[T] = object
-      a*, b*: T
-      openLeft*, openRight*: bool
-
-    func `<..`*[T](a, b: T): OpenSlice[T] =
-      OpenSlice[T](a: a, b: b, openLeft: true, openRight: false)
-
-    func `..<`*(a, b: float): OpenSlice[float] =
-      OpenSlice[float](a: a, b: b, openLeft: false, openRight: true)
-
-    func `<..<`*[T](a, b: T): OpenSlice[T] =
-      OpenSlice[T](a: a, b: b, openLeft: true, openRight: true)
-
-    proc contains*[T](r: OpenSlice[T], x: T): bool =
-      (if r.openLeft: x > r.a else: x >= r.a) and
-      (if r.openRight: x < r.b else: x <= r.b)
 
     proc rand*(r: Slice[int]): int =
       random.rand(r)

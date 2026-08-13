@@ -7,14 +7,14 @@ when not declared(LIBRARY_TEMPLATE):
   template inf(T: typedesc[int]): int = 10 ^ 18
   template inf(T: typedesc[float]): float = 1e18
 
-  # @(char)： 基準との ord の差を返す（引数を入れれば基準になる）
-  proc `@`(x: char): int =
+  # ordDiff： 基準との ord の差を返す（引数を入れれば基準になる）
+  proc ordDiff(x: char): int {.inline.} =
     case x
     of 'a'..'z': x.ord - 'a'.ord
     of 'A'..'Z': x.ord - 'A'.ord
     of '0'..'9': x.ord - '0'.ord
     else: x.ord
-  proc `@`(x, base: char): int {.inline.} =
+  proc ordDiff(x, base: char): int {.inline.} =
     x.ord - base.ord
 
   # ceilDiv： Nim では負数の定義がないので定義変更（ceil/floor も ceilDiv/floorDiv も右／左を返す）
@@ -31,14 +31,14 @@ when not declared(LIBRARY_TEMPLATE):
       nx = (x + n div x) div 2
     return x
 
-  proc chMax[T](a: var T, b: T): bool {.discardable, inline.} =
-    if a < b:
+  proc chMin[T](a: var T, b: T): bool {.discardable, inline.} =
+    if a > b:
       a = b
       return true
     else:
       return false
-  proc chMin[T](a: var T, b: T): bool {.discardable, inline.} =
-    if a > b:
+  proc chMax[T](a: var T, b: T): bool {.discardable, inline.} =
+    if a < b:
       a = b
       return true
     else:
@@ -240,33 +240,34 @@ when not declared(LIBRARY_TEMPLATE):
           `modifiedBody`
         `elseBody`
 
-  macro reduceOf(i, s, body, combineExpr: untyped): untyped =
+  macro reduceOf(i, s, body, combine: untyped): untyped =
+    let fnSym = genSym(nskProc, "reduceFn")
+    let accSym = genSym(nskVar, "acc")
+    let firstSym = genSym(nskVar, "first")
+    let vSym = genSym(nskLet, "v")
     result = quote do:
       block:
-        type T = typeof((
-          block:
-            var `i`: typeof(`s`.a)
-            `body`
-        ))
-        var acc: T
-        var isFirst = true
+        proc `fnSym`(`i`: typeof(`s`.a)): auto =
+          `body`
+        var `firstSym` = true
+        var `accSym`: typeof(`fnSym`(`s`.a))
         for `i` in `s`:
-          let v = `body`
-          if isFirst:
-            acc = v
-            isFirst = false
+          let `vSym` = `fnSym`(`i`)
+          if `firstSym`:
+            `accSym` = `vSym`
+            `firstSym` = false
           else:
-            acc = `combineExpr`
-        acc
+            `accSym` = `combine`(`accSym`, `vSym`)
+        `accSym`
   # sumOf(i, range, expr): T
   template sumOf(i, s, body: untyped): untyped =
-    reduceOf(i, s, body, acc + v)
+    reduceOf(i, s, body, `+`)
   # minOf(i, range, expr): T
   template minOf(i, s, body: untyped): untyped =
-    reduceOf(i, s, body, min(acc, v))
+    reduceOf(i, s, body, min)
   # maxOf(i, range, expr): T
   template maxOf(i, s, body: untyped): untyped =
-    reduceOf(i, s, body, max(acc, v))
+    reduceOf(i, s, body, max)
   # countOf(i, range, pred): int
   template countOf(i, s, body: untyped): untyped =
     sumOf(i, s, (if body: 1 else: 0))
@@ -276,7 +277,7 @@ when not declared(LIBRARY_TEMPLATE):
     for _ in 1 .. loopCnt:
       body
 
-  # query(count): op id: body
+  # query(Q): op id: body
   macro query*(countExpr: typed, body: untyped): untyped =
     let countVar = genSym(nskVar, "q_count")
     let typeVar = genSym(nskVar, "q_type")
@@ -303,7 +304,7 @@ when not declared(LIBRARY_TEMPLATE):
   template mutable[T](x: T): var T =
     cast[ptr T](x.unsafeAddr)[]
 
-  # int / string / float.input
+  # int/string/float.input
   proc getcharUnlocked(): cint {.header: "<stdio.h>", importc: "getchar_unlocked".}
   proc validChar(): cint =
     while true:
@@ -532,7 +533,7 @@ when not declared(LIBRARY_TEMPLATE):
         result = sampleWithReplacement(n, () => pool[random.rand(0 ..< pool.len)])
       result.sortSeq(opts)
 
-    # randSeq[d1,d2,..: 1..9, {unique： 重複しない／inc： 広義単調増加／dec： 広義単調減少（uniqueと一緒に指定すれば狭義）}]
+    # randSeq[d1,d2,..: min .. max, {unique： 重複しない／inc： 広義単調増加／dec： 広義単調減少（uniqueと一緒に指定すれば狭義）}]
     type InitRandSeq = object
     const randSeq* = InitRandSeq()
     macro `[]`*(r: InitRandSeq, args: varargs[untyped]): untyped =
@@ -899,7 +900,7 @@ when not declared(LIBRARY_TEMPLATE):
       for s in grid:
         line(s)
 
-    # emitGraph(G) で重みなしグラフを出力、emitGraph(G, W) で重み付きグラフを出力
+    # emitGraph(G) で重みなしグラフの、emitGraph(G, W) で重み付きグラフの辺リストを出力
     proc emitGraph*(edges: openArray[(int, int)]) =
       for (u, v) in edges:
         line($u & " " & $v)

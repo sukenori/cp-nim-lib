@@ -1,17 +1,12 @@
 when not declared(LIBRARY_BISECT):
   const LIBRARY_BISECT = true
-  include "/workspaces/AtCoder-Nim/.Library/.Template/Template.nim"
-
+  include "../template.nim"
+  # .less/lessEqual/greater/greaterEqual(x): Bisect ソート済み配列に対して条件を満たす範囲を返す
+  # Bisect.first: int 条件を満たす範囲の先頭のインデックス（該当する要素がない場合 -1）
+  # Bisect.last: int 条件を満たす範囲の末尾のインデックス（該当する要素がない場合 -1）
+  # Bisect.count: int 条件を満たす範囲の要素の個数
   type Bisect = object
     first, last, count: int
-  ##- **openArray[T].less/lessEqual/greater/greaterEqual(x)**: Bisect
-  ##    - ソート済み配列に対して条件を満たす範囲の先頭/末尾/要素の個数を返す
-  ##- **Bisect.first**: int
-  ##    - 条件を満たす範囲の先頭のインデックス（該当する要素がない場合 -1）
-  ##- **Bisect.last**: int
-  ##    - 条件を満たす範囲の末尾のインデックス（該当する要素がない場合 -1）
-  ##- **Bisect.count**: int
-  ##    - 条件を満たす範囲の要素の個数
   func bisect(l, r: int): Bisect =
     result.count = max(0, r - l)
     if result.count > 0:

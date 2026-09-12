@@ -272,8 +272,8 @@ when not declared(LIBRARY_TEMPLATE):
   template countOf(i, s, body: untyped): untyped =
     sumOf(i, s, (if body: 1 else: 0))
 
-  # loop(n)
   template loop(loopCnt: int, body: untyped) =
+    ## loopCnt 回のループ（for _ in 1 .. loopCnt:）
     for _ in 1 .. loopCnt:
       body
 
@@ -363,13 +363,13 @@ when not declared(LIBRARY_TEMPLATE):
   template echoFloat(v: float) =
     echo v.formatFloat(ffDecimal, 20)
 
-  # dump
   proc debugPassThrough[T](x: T, label: string = ""): T {.inline, discardable.} =
     when defined(debug):
       let prefix = if label.len > 0: label & " = " else: "\x1b[31m[DUMP]\x1b[0m "
       stderr.writeLine(prefix & $x)
     return x
   macro dump*(args: varargs[untyped]): untyped =
+    ## デバッグ用ダンプ
     when defined(debug):
       var line: NimNode = nil
       for a in args:
